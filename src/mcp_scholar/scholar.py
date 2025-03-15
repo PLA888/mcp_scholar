@@ -1,57 +1,101 @@
 from bs4 import BeautifulSoup
 import httpx
+from scholarly import scholarly  # 新增导入
+
 
 async def search_scholar(query: str, count: int) -> list[dict]:
-    """模拟谷歌学术搜索"""
-    params = {
-        "q": query,
-        "hl": "en",
-        "as_sdt": "0,5"
-    }
-    
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            "https://scholar.google.com/scholar",
-            params=params,
-            headers={"User-Agent": "MCP Scholar/1.0"}
-        )
-        resp.raise_for_status()
-    
-    soup = BeautifulSoup(resp.text, 'lxml')
+    """使用scholarly库搜索谷歌学术论文"""
     results = []
-    
-    for gs_ri in soup.select(".gs_ri"):
-        title = gs_ri.select_one(".gs_rt").text
-        authors = gs_ri.select_one(".gs_a").text
-        abstract = gs_ri.select_one(".gs_rs").text
-        citations = gs_ri.select_one(".gs_fl > a") 
-        
-        results.append({
-            "title": title,
-            "authors": authors,
-            "abstract": abstract,
-            "citations": int(citations.text.split()[2]) if citations else 0
-        })
-        
-        if len(results) >= count:
-            break
-            
-    return sorted(results, key=lambda x: -x["citations"])
+    try:
+        # 使用scholarly库进行搜索
+        search_query = scholarly.search_pubs(query)
 
-def parse_profile(html: str, top_n: int) -> list[dict]:
-    """解析个人学术主页"""
-    soup = BeautifulSoup(html, 'lxml')
-    papers = []
-    
-    for row in soup.select("#gsc_a_b .gsc_a_t"):
-        title = row.select_one(".gsc_a_at").text
-        citations = row.select_one(".gsc_a_c").text
-        year = row.select_one(".gsc_a_y").text
-        
-        papers.append({
-            "title": title,
-            "citations": int(citations) if citations.isdigit() else 0,
-            "year": year
-        })
-    
-    return sorted(papers, key=lambda x: -x["citations"])[:top_n]
+        for _ in range(count):
+            try:
+                pub = next(search_query)
+                # 提取相关信息
+                results.append(
+                    {
+                        "title": pub.get("bib", {}).get("title", "未知标题"),
+                        "authors": ", ".join(pub.get("bib", {}).get("author", [])),
+                        "abstract": pub.get("bib", {}).get("abstract", "无摘要"),
+                        "citations": pub.get("num_citations", 0),
+                        "year": pub.get("bib", {}).get("pub_year", "未知年份"),
+                        "paper_id": (
+                            pub.get("pub_url", "").split("citation_for_view=")[-1]
+                            if "citation_for_view=" in pub.get("pub_url", "")
+                            else None
+                        ),
+                    }
+                )
+            except StopIteration:
+                break
+            except Exception as e:
+                print(f"处理单篇论文时出错: {str(e)}")
+                continue
+
+        return sorted(results, key=lambda x: -x["citations"])
+    except Exception as e:
+        print(f"搜索谷歌学术时出错: {str(e)}")
+        return []
+
+
+async def parse_profile(profile_id: str, top_n: int) -> list[dict]:
+    """使用scholarly库解析谷歌学术个人主页"""
+    try:
+        # 通过ID查找作者
+        author = scholarly.search_author_id(profile_id)
+        if not author:
+            print(f"未找到ID为{profile_id}的学者")
+            return []
+
+        # 获取完整信息
+        author = scholarly.fill(author)
+
+        # 获取发表的论文
+        publications = author.get("publications", [])
+        papers = []
+
+        for pub in publications[:top_n]:
+            try:
+                # 获取详细信息
+                filled_pub = scholarly.fill(pub)
+                papers.append(
+                    {
+                        "title": filled_pub.get("bib", {}).get("title", "未知标题"),
+                        "authors": ", ".join(
+                            filled_pub.get("bib", {}).get("author", [])
+                        ),
+                        "citations": filled_pub.get("num_citations", 0),
+                        "year": filled_pub.get("bib", {}).get("pub_year", "未知年份"),
+                        "venue": filled_pub.get("bib", {}).get("venue", ""),
+                        "paper_id": (
+                            filled_pub.get("pub_url", "").split("citation_for_view=")[
+                                -1
+                            ]
+                            if "citation_for_view=" in filled_pub.get("pub_url", "")
+                            else None
+                        ),
+                    }
+                )
+            except Exception as e:
+                print(f"处理单篇论文时出错: {str(e)}")
+                continue
+
+        # 按引用数排序
+        papers = sorted(papers, key=lambda x: -x["citations"])
+        return papers[:top_n]
+    except Exception as e:
+        print(f"解析学者档案时出错: {str(e)}")
+        return []
+
+
+# 增加一个新函数，用于从URL中提取学者ID
+def extract_profile_id_from_url(url: str) -> str:
+    """从谷歌学术个人主页URL中提取学者ID"""
+    import re
+
+    match = re.search(r"user=([^&]+)", url)
+    if match:
+        return match.group(1)
+    return ""
