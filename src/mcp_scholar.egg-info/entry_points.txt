@@ -1,0 +1,2 @@
+[console_scripts]
+mcp_scholar = mcp_scholar.server:main

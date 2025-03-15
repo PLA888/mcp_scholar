@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-scholar"
+version = "0.1.0"
+description = "MCP Scholar for Google Scholar search"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "beautifulsoup4>=4.13.3",
+    "httpx>=0.28.1",
+    "mcp[cli]>=1.4.1",
+    "python-dotenv>=1.0.1",
+    "lxml>=4.9.3",
+]
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "mypy>=1.15.0",
+]
+
+[project.scripts]
+mcp-scholar = "mcp_scholar:cli_main"
