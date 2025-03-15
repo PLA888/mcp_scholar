@@ -6,7 +6,7 @@ MCP Scholar 服务
 import logging
 import sys
 import json
-from mcp.server.fastmcp import FastMCP, Context, prompt
+from mcp.server.fastmcp import FastMCP, Context
 from mcp_scholar.scholar import (
     search_scholar,
     get_paper_detail,
@@ -45,43 +45,51 @@ PRESET_SUMMARY_PROMPT = """
 请确保总结全面、客观、准确，并突出这些论文的学术价值和实际应用意义。对于引用量较高的论文，请给予更多关注。
 """
 
-# 针对学者论文的预设提示词
-PROFILE_SUMMARY_PROMPT = """
-请对以下学者的高引用论文进行综合分析，包括：
 
-1. **学者研究方向**：基于这些高引用论文，总结该学者的主要研究领域和专长。
-   
-2. **研究影响力分析**：评估这些论文的学术影响力，特别关注引用量高的工作及其在相关领域的地位。
-   
-3. **研究发展历程**：按时间顺序分析这些论文，揭示该学者研究兴趣和方法的演变过程。
-   
-4. **与同行的研究对比**：如果可能，比较该学者的研究与该领域其他重要工作的异同。
-   
-5. **研究价值与应用**：分析这些研究成果的实际应用价值和对相关产业的潜在影响。
+# 定义提示词函数
+def paper_summary_prompt() -> str:
+    return PRESET_SUMMARY_PROMPT
 
-请提供一个全面、客观的学术分析，突出该学者的研究特色和学术贡献。
-"""
 
-# 搜索提示词常量
-SEARCH_SUMMARY_PROMPT = """
-请对以下搜索结果进行详细分析和总结:
+def profile_paper_prompt() -> str:
+    return """
+    请对以下学者的高引用论文进行综合分析，包括：
 
-1. **文献概述**: 简要概述这些搜索结果的共同主题和各自特点，特别关注最新的研究成果。
+    1. **学者研究方向**：基于这些高引用论文，总结该学者的主要研究领域和专长。
+       
+    2. **研究影响力分析**：评估这些论文的学术影响力，特别关注引用量高的工作及其在相关领域的地位。
+       
+    3. **研究发展历程**：按时间顺序分析这些论文，揭示该学者研究兴趣和方法的演变过程。
+       
+    4. **与同行的研究对比**：如果可能，比较该学者的研究与该领域其他重要工作的异同。
+       
+    5. **研究价值与应用**：分析这些研究成果的实际应用价值和对相关产业的潜在影响。
 
-2. **研究脉络**: 梳理这些论文反映的研究发展脉络，展示领域内的思想演变过程。
+    请提供一个全面、客观的学术分析，突出该学者的研究特色和学术贡献。
+    """
 
-3. **方法论比较**: 比较不同论文采用的研究方法和技术路线，分析各自的优缺点。
 
-4. **核心发现**: 提炼出最具创新性和影响力的研究发现，评估其对该领域的贡献。
+def search_prompt() -> str:
+    return """
+    请对以下搜索结果进行详细分析和总结:
 
-5. **应用价值**: 分析这些研究成果的实际应用前景和潜在价值。
+    1. **文献概述**: 简要概述这些搜索结果的共同主题和各自特点，特别关注最新的研究成果。
 
-6. **研究缺口**: 指出现有研究中的不足之处和未来可能的研究方向。
+    2. **研究脉络**: 梳理这些论文反映的研究发展脉络，展示领域内的思想演变过程。
 
-请根据引用量和发表时间对文献进行适当加权，对高引用的经典文献和最新研究成果给予更多关注。
-"""
+    3. **方法论比较**: 比较不同论文采用的研究方法和技术路线，分析各自的优缺点。
 
-@mcp.prompt(SEARCH_SUMMARY_PROMPT)
+    4. **核心发现**: 提炼出最具创新性和影响力的研究发现，评估其对该领域的贡献。
+
+    5. **应用价值**: 分析这些研究成果的实际应用前景和潜在价值。
+
+    6. **研究缺口**: 指出现有研究中的不足之处和未来可能的研究方向。
+
+    请根据引用量和发表时间对文献进行适当加权，对高引用的经典文献和最新研究成果给予更多关注。
+    """
+
+
+# 工具函数
 @mcp.tool()
 async def scholar_search(ctx: Context, keywords: str, count: int = 5) -> Dict[str, Any]:
     """
@@ -171,11 +179,7 @@ async def paper_references(
                 {
                     "title": ref["title"],
                     "authors": ref["authors"],
-                    "abstract": (
-                        ref["abstract"][:200] + "..."
-                        if len(ref["abstract"]) > 200
-                        else ref["abstract"]
-                    ),
+                    "abstract":ref["abstract"],
                     "citations": ref["citations"],
                     "year": ref.get("year", "Unknown"),
                     "paper_id": ref.get("paper_id", None),
@@ -190,7 +194,6 @@ async def paper_references(
         return {"status": "error", "message": "论文引用服务暂时不可用", "error": str(e)}
 
 
-@mcp.prompt(PROFILE_SUMMARY_PROMPT)
 @mcp.tool()
 async def profile_papers(
     ctx: Context, profile_url: str, count: int = 5
@@ -239,7 +242,6 @@ async def profile_papers(
         return {"status": "error", "message": "学者论文服务暂时不可用", "error": str(e)}
 
 
-@mcp.prompt(PRESET_SUMMARY_PROMPT)
 @mcp.tool()
 async def summarize_papers(ctx: Context, topic: str, count: int = 5) -> str:
     """

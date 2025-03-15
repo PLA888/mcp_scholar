@@ -17,7 +17,7 @@ async def test_search_scholar():
         print(f"\n论文 {i}:")
         print(f"标题: {paper['title']}")
         print(f"作者: {paper['authors']}")
-        print(f"摘要: {paper['abstract']}...")
+        print(f"摘要: {paper['abstract']}")
         print(f"引用次数: {paper['citations']}")
 
 
