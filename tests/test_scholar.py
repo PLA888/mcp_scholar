@@ -40,6 +40,7 @@ async def test_parse_real_profile():
                 print(f"\n论文 {i}:")
                 print(f"标题: {paper['title']}")
                 print(f"引用: {paper['citations']}")
+                print(f"摘要: {paper['abstract']}")
                 print(f"年份: {paper.get('year', 'N/A')}")
                 if "authors" in paper:
                     print(f"作者: {paper['authors']}")
@@ -54,8 +55,8 @@ async def test_parse_real_profile():
 
 
 async def main():
-    await test_search_scholar()  # 可能触发谷歌限制，可选择性注释
-    # await test_parse_real_profile()  # 真实数据测试
+    # await test_search_scholar()  # 可能触发谷歌限制，可选择性注释
+    await test_parse_real_profile()  # 真实数据测试
 
 
 if __name__ == "__main__":

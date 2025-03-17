@@ -8,14 +8,106 @@ import httpx
 import asyncio
 from scholarly import scholarly
 from typing import List, Dict, Any, Optional
+from bs4 import BeautifulSoup
 
 # 配置 scholarly 的代理，如果需要的话
 # scholarly.use_proxy(http="http://127.0.0.1:7890", https="http://127.0.0.1:7890")
 
 
+async def enrich_abstract(paper: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    尝试从多个来源获取更完整的论文摘要
+
+    Args:
+        paper: 包含基本信息的论文字典
+
+    Returns:
+        Dict: 添加了完整摘要的论文信息
+    """
+    title = paper.get("title", "")
+    if not title:
+        return paper
+
+    try:
+        # 1. 尝试从 Semantic Scholar 获取摘要
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # 使用论文标题搜索
+            params = {"query": title, "limit": 1}
+            response = await client.get(
+                "https://api.semanticscholar.org/graph/v1/paper/search", params=params
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("data") and len(data["data"]) > 0:
+                    paper_id = data["data"][0]["paperId"]
+
+                    # 获取论文详情
+                    fields = "title,abstract,authors,year,citationCount,venue"
+                    paper_response = await client.get(
+                        f"https://api.semanticscholar.org/graph/v1/paper/{paper_id}?fields={fields}"
+                    )
+
+                    if paper_response.status_code == 200:
+                        paper_details = paper_response.json()
+                        if paper_details.get("abstract") and len(
+                            paper_details["abstract"]
+                        ) > len(paper.get("abstract", "")):
+                            paper["abstract"] = paper_details["abstract"]
+                            paper["abstract_source"] = "Semantic Scholar"
+                            return paper
+
+        # 2. 尝试从 Crossref 获取摘要
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            params = {"query.title": title, "rows": 1}
+            response = await client.get("https://api.crossref.org/works", params=params)
+
+            if response.status_code == 200:
+                data = response.json()
+                if (
+                    data.get("message", {}).get("items")
+                    and len(data["message"]["items"]) > 0
+                ):
+                    item = data["message"]["items"][0]
+                    if item.get("abstract") and len(item["abstract"]) > len(
+                        paper.get("abstract", "")
+                    ):
+                        # 移除 XML/HTML 标签
+                        abstract = BeautifulSoup(
+                            item["abstract"], "html.parser"
+                        ).get_text()
+                        paper["abstract"] = abstract
+                        paper["abstract_source"] = "Crossref"
+                        return paper
+
+        # 3. 如果有 DOI，尝试从 Unpaywall 获取
+        if paper.get("doi"):
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"https://api.unpaywall.org/v2/{paper['doi']}?email=your_email@example.com"
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("abstract") and len(data["abstract"]) > len(
+                        paper.get("abstract", "")
+                    ):
+                        paper["abstract"] = data["abstract"]
+                        paper["abstract_source"] = "Unpaywall"
+                        return paper
+
+        # 在这里可以继续添加其他学术 API 的尝试...
+
+    except Exception as e:
+        print(f"丰富摘要时出错: {str(e)}")
+
+    # 如果没有找到更完整的摘要，返回原始论文
+    return paper
+
+
 async def search_scholar(query: str, count: int = 5) -> List[Dict[str, Any]]:
     """
-    搜索谷歌学术论文
+    搜索谷歌学术论文，并尝试获取完整摘要
 
     Args:
         query: 搜索关键词
@@ -51,6 +143,13 @@ async def search_scholar(query: str, count: int = 5) -> List[Dict[str, Any]]:
                     paper["paper_id"] = pub_url.split("cluster=")[-1].split("&")[0]
                 else:
                     paper["paper_id"] = None
+
+                # 提取 DOI（如果有）
+                if pub.get("doi"):
+                    paper["doi"] = pub["doi"]
+
+                # 尝试获取完整摘要
+                paper = await enrich_abstract(paper)
 
                 results.append(paper)
 
