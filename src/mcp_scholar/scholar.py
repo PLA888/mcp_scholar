@@ -28,6 +28,11 @@ async def enrich_abstract(paper: Dict[str, Any]) -> Dict[str, Any]:
     if not title:
         return paper
 
+    # 初始化摘要信息
+    paper["abstract_source"] = "Google Scholar"
+    paper["abstract_quality"] = "基本"
+    original_abstract_len = len(paper.get("abstract", ""))
+
     try:
         # 1. 尝试从 Semantic Scholar 获取摘要
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -50,11 +55,20 @@ async def enrich_abstract(paper: Dict[str, Any]) -> Dict[str, Any]:
 
                     if paper_response.status_code == 200:
                         paper_details = paper_response.json()
-                        if paper_details.get("abstract") and len(
-                            paper_details["abstract"]
-                        ) > len(paper.get("abstract", "")):
-                            paper["abstract"] = paper_details["abstract"]
+                        ss_abstract = paper_details.get("abstract", "")
+
+                        # 不仅比较长度，还检查内容质量
+                        if ss_abstract and (
+                            len(ss_abstract) > original_abstract_len * 1.2
+                            or (
+                                len(ss_abstract) > original_abstract_len * 0.8
+                                and "et al." not in ss_abstract
+                                and len(ss_abstract.split()) > 30
+                            )
+                        ):
+                            paper["abstract"] = ss_abstract
                             paper["abstract_source"] = "Semantic Scholar"
+                            paper["abstract_quality"] = "增强"
                             return paper
 
         # 2. 尝试从 Crossref 获取摘要
@@ -98,20 +112,33 @@ async def enrich_abstract(paper: Dict[str, Any]) -> Dict[str, Any]:
 
         # 在这里可以继续添加其他学术 API 的尝试...
 
+        # 最后添加详细的摘要信息
+        paper["abstract_length"] = len(paper.get("abstract", ""))
+        if paper["abstract_length"] > original_abstract_len:
+            paper["abstract_improved"] = True
+        else:
+            paper["abstract_improved"] = False
+
     except Exception as e:
         print(f"丰富摘要时出错: {str(e)}")
+        # 出错时保留原始摘要，并标记来源
+        if "abstract_source" not in paper:
+            paper["abstract_source"] = "Google Scholar(原始)"
 
     # 如果没有找到更完整的摘要，返回原始论文
     return paper
 
 
-async def search_scholar(query: str, count: int = 5) -> List[Dict[str, Any]]:
+async def search_scholar(
+    query: str, count: int = 5, fuzzy_search: bool = False
+) -> List[Dict[str, Any]]:
     """
     搜索谷歌学术论文，并尝试获取完整摘要
 
     Args:
         query: 搜索关键词
         count: 返回结果数量
+        fuzzy_search: 是否启用模糊搜索，当为True时使用更宽松的搜索策略
 
     Returns:
         List[Dict]: 论文信息列表，按引用量排序
@@ -119,9 +146,21 @@ async def search_scholar(query: str, count: int = 5) -> List[Dict[str, Any]]:
     results = []
     try:
         # 使用scholarly库进行搜索
-        search_query = scholarly.search_pubs(query)
+        if fuzzy_search:
+            # 模糊搜索：拆分关键词，只使用主要关键词，或添加通配符
+            keywords = query.split()
+            if len(keywords) > 1:
+                # 使用前两个主要关键词或关键短语，忽略其他限制词
+                main_keywords = " ".join(keywords[:2])
+                search_query = scholarly.search_pubs(main_keywords)
+            else:
+                # 单个关键词时添加通配符或更宽泛的匹配
+                search_query = scholarly.search_pubs(f'"{query}" OR {query}')
+        else:
+            # 精确搜索：直接使用原始查询字符串
+            search_query = scholarly.search_pubs(query)
 
-        for _ in range(count):
+        for _ in range(count * 2):  # 获取更多结果以备筛选
             try:
                 pub = next(search_query)
 
@@ -135,8 +174,10 @@ async def search_scholar(query: str, count: int = 5) -> List[Dict[str, Any]]:
                     "venue": pub.get("bib", {}).get("venue", ""),
                 }
 
-                # 提取论文ID
+                # 提取论文ID和URL
                 pub_url = pub.get("pub_url", "")
+                paper["url"] = pub_url  # 添加URL信息
+
                 if "citation_for_view=" in pub_url:
                     paper["paper_id"] = pub_url.split("citation_for_view=")[-1]
                 elif "cluster=" in pub_url:
@@ -147,6 +188,7 @@ async def search_scholar(query: str, count: int = 5) -> List[Dict[str, Any]]:
                 # 提取 DOI（如果有）
                 if pub.get("doi"):
                     paper["doi"] = pub["doi"]
+                    paper["doi_url"] = f"https://doi.org/{pub['doi']}"  # 添加DOI URL
 
                 # 尝试获取完整摘要
                 paper = await enrich_abstract(paper)
@@ -156,13 +198,24 @@ async def search_scholar(query: str, count: int = 5) -> List[Dict[str, Any]]:
                 # 添加延迟以避免被谷歌限制
                 await asyncio.sleep(1)
 
+                # 如果已经获得足够的结果，可以提前停止
+                if len(results) >= count and not fuzzy_search:
+                    break
+
             except StopIteration:
                 break
             except Exception as e:
                 print(f"处理单篇论文时出错: {str(e)}")
                 continue
 
-        return sorted(results, key=lambda x: -x["citations"])
+        # 对于模糊搜索，可能需要基于相关性进行额外排序
+        if fuzzy_search and results:
+            # 先按引用量排序
+            results = sorted(results, key=lambda x: -x["citations"])
+            # 只返回需要的数量
+            return results[:count]
+        else:
+            return sorted(results, key=lambda x: -x["citations"])[:count]
     except Exception as e:
         print(f"搜索谷歌学术时出错: {str(e)}")
         return []
@@ -201,7 +254,7 @@ async def get_paper_detail(paper_id: str) -> Optional[Dict[str, Any]]:
                 return None
 
         # 提取详细信息
-        return {
+        result = {
             "title": pub.get("bib", {}).get("title", "未知标题"),
             "authors": ", ".join(pub.get("bib", {}).get("author", [])),
             "abstract": pub.get("bib", {}).get("abstract", "无摘要"),
@@ -214,6 +267,13 @@ async def get_paper_detail(paper_id: str) -> Optional[Dict[str, Any]]:
                 pub.get("cites_id", {}).get("link", "") if pub.get("cites_id") else ""
             ),
         }
+
+        # 提取 DOI（如果有）
+        if pub.get("doi"):
+            result["doi"] = pub["doi"]
+            result["doi_url"] = f"https://doi.org/{pub['doi']}"
+
+        return result
     except Exception as e:
         print(f"获取论文详情时出错: {str(e)}")
         return None
@@ -253,14 +313,21 @@ async def get_paper_references(paper_id: str, count: int = 5) -> List[Dict[str, 
                     "venue": pub.get("bib", {}).get("venue", ""),
                 }
 
-                # 提取论文ID
+                # 提取论文ID和URL
                 pub_url = pub.get("pub_url", "")
+                paper["url"] = pub_url  # 添加URL信息
+
                 if "citation_for_view=" in pub_url:
                     paper["paper_id"] = pub_url.split("citation_for_view=")[-1]
                 elif "cluster=" in pub_url:
                     paper["paper_id"] = pub_url.split("cluster=")[-1].split("&")[0]
                 else:
                     paper["paper_id"] = None
+
+                # 提取DOI（如果有）
+                if pub.get("doi"):
+                    paper["doi"] = pub["doi"]
+                    paper["doi_url"] = f"https://doi.org/{pub['doi']}"
 
                 results.append(paper)
 
@@ -320,14 +387,21 @@ async def parse_profile(profile_id: str, top_n: int = 5) -> List[Dict[str, Any]]
                     "abstract": filled_pub.get("bib", {}).get("abstract", "无摘要"),
                 }
 
-                # 提取论文ID
+                # 提取论文ID和URL
                 pub_url = filled_pub.get("pub_url", "")
+                paper["url"] = pub_url  # 添加URL信息
+
                 if "citation_for_view=" in pub_url:
                     paper["paper_id"] = pub_url.split("citation_for_view=")[-1]
                 elif "cluster=" in pub_url:
                     paper["paper_id"] = pub_url.split("cluster=")[-1].split("&")[0]
                 else:
                     paper["paper_id"] = None
+
+                # 提取DOI（如果有）
+                if filled_pub.get("doi"):
+                    paper["doi"] = filled_pub["doi"]
+                    paper["doi_url"] = f"https://doi.org/{filled_pub['doi']}"
 
                 papers.append(paper)
 

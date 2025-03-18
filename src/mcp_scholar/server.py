@@ -91,23 +91,88 @@ def search_prompt() -> str:
 
 # 工具函数
 @mcp.tool()
-async def scholar_search(ctx: Context, keywords: str, count: int = 5) -> Dict[str, Any]:
+async def scholar_search(
+    ctx: Context, keywords: str, count: int = 5, fuzzy_search: bool = False
+) -> Dict[str, Any]:
     """
     搜索谷歌学术并返回论文摘要
 
     Args:
         keywords: 搜索关键词
         count: 返回结果数量，默认为5
+        fuzzy_search: 是否使用模糊搜索，默认为False
 
     Returns:
         Dict: 包含论文列表的字典
     """
     try:
-        logger.info(f"正在搜索谷歌学术: {keywords}...")
-        results = await search_scholar(keywords, count)
+        search_mode = "模糊搜索" if fuzzy_search else "精确搜索"
+        logger.info(f"正在进行{search_mode}谷歌学术: {keywords}...")
+        results = await search_scholar(keywords, count, fuzzy_search=fuzzy_search)
 
         papers = []
         for p in results:
+            papers.append(
+                {
+                    "title": p["title"],
+                    "authors": p["authors"],
+                    "abstract": p["abstract"],
+                    "abstract_source": p.get("abstract_source", "Google Scholar"),
+                    "abstract_quality": p.get("abstract_quality", "基本"),
+                    "citations": p["citations"],
+                    "year": p.get("year", "Unknown"),
+                    "paper_id": p.get("paper_id", None),
+                    "venue": p.get("venue", ""),
+                    "url": p.get("url", ""),  # 添加URL
+                    "doi_url": p.get("doi_url", ""),  # 添加DOI URL
+                }
+            )
+
+        return {
+            "status": "success",
+            "papers": papers,
+            "search_mode": search_mode,
+            "total_results": len(papers),
+        }
+    except Exception as e:
+        logger.error(f"搜索失败: {str(e)}", exc_info=True)
+        return {"status": "error", "message": "学术搜索服务暂时不可用", "error": str(e)}
+
+
+@mcp.tool()
+async def adaptive_search(
+    ctx: Context, keywords: str, count: int = 5, min_results: int = 3
+) -> Dict[str, Any]:
+    """
+    自适应搜索谷歌学术，先尝试精确搜索，如果结果太少则自动切换到模糊搜索
+
+    Args:
+        keywords: 搜索关键词
+        count: 返回结果数量，默认为5
+        min_results: 最少需要返回的结果数量，少于此数量会触发模糊搜索，默认为3
+
+    Returns:
+        Dict: 包含论文列表和搜索模式的字典
+    """
+    try:
+        # 先进行精确搜索
+        logger.info(f"开始自适应搜索流程，首先进行精确搜索: {keywords}...")
+        precise_results = await search_scholar(keywords, count, fuzzy_search=False)
+
+        search_mode = "精确搜索"
+        final_results = precise_results
+
+        # 如果精确搜索结果太少，切换到模糊搜索
+        if len(precise_results) < min_results:
+            logger.info(
+                f"精确搜索结果不足({len(precise_results)}<{min_results})，切换到模糊搜索"
+            )
+            fuzzy_results = await search_scholar(keywords, count, fuzzy_search=True)
+            search_mode = "模糊搜索(由于精确搜索结果不足)"
+            final_results = fuzzy_results
+
+        papers = []
+        for p in final_results:
             papers.append(
                 {
                     "title": p["title"],
@@ -117,12 +182,19 @@ async def scholar_search(ctx: Context, keywords: str, count: int = 5) -> Dict[st
                     "year": p.get("year", "Unknown"),
                     "paper_id": p.get("paper_id", None),
                     "venue": p.get("venue", ""),
+                    "url": p.get("url", ""),  # 添加URL
+                    "doi_url": p.get("doi_url", ""),  # 添加DOI URL
                 }
             )
 
-        return {"status": "success", "papers": papers}
+        return {
+            "status": "success",
+            "papers": papers,
+            "search_mode": search_mode,
+            "total_results": len(papers),
+        }
     except Exception as e:
-        logger.error(f"搜索失败: {str(e)}", exc_info=True)
+        logger.error(f"自适应搜索失败: {str(e)}", exc_info=True)
         return {"status": "error", "message": "学术搜索服务暂时不可用", "error": str(e)}
 
 
@@ -143,6 +215,14 @@ async def paper_detail(ctx: Context, paper_id: str) -> Dict[str, Any]:
         detail = await get_paper_detail(paper_id)
 
         if detail:
+            # 确保URL信息被返回
+            if "url" not in detail and detail.get("pub_url"):
+                detail["url"] = detail["pub_url"]
+
+            # 如果有DOI，添加DOI URL
+            if "doi" in detail and "doi_url" not in detail:
+                detail["doi_url"] = f"https://doi.org/{detail['doi']}"
+
             return {"status": "success", "detail": detail}
         else:
             # 移除错误通知
@@ -179,10 +259,12 @@ async def paper_references(
                 {
                     "title": ref["title"],
                     "authors": ref["authors"],
-                    "abstract":ref["abstract"],
+                    "abstract": ref["abstract"],
                     "citations": ref["citations"],
                     "year": ref.get("year", "Unknown"),
                     "paper_id": ref.get("paper_id", None),
+                    "url": ref.get("url", ""),  # 添加URL
+                    "doi_url": ref.get("doi_url", ""),  # 添加DOI URL
                 }
             )
 
@@ -231,6 +313,8 @@ async def profile_papers(
                     "year": p.get("year", "Unknown"),
                     "venue": p.get("venue", ""),
                     "paper_id": p.get("paper_id", None),
+                    "url": p.get("url", ""),  # 添加URL
+                    "doi_url": p.get("doi_url", ""),  # 添加DOI URL
                 }
             )
 
@@ -272,6 +356,14 @@ async def summarize_papers(ctx: Context, topic: str, count: int = 5) -> str:
             summary += f"### {i+1}. {paper['title']}\n"
             summary += f"**作者**: {paper['authors']}\n"
             summary += f"**引用量**: {paper['citations']}\n"
+            if paper.get("url"):
+                summary += (
+                    f"**链接**: [{paper.get('url', '')}]({paper.get('url', '')})\n"
+                )
+            if paper.get("doi_url"):
+                summary += (
+                    f"**DOI**: [{paper.get('doi', '')}]({paper.get('doi_url', '')})\n"
+                )
             summary += f"**摘要**: {paper['abstract']}\n\n"
 
         return summary
