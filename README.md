@@ -11,25 +11,6 @@
 
 ## 安装方法
 
-### 使用uv安装
-
-```bash
-# 克隆仓库
-git clone https://github.com/renyumeng1/mcp-scholar.git
-cd mcp-scholar
-
-# 使用uv安装依赖
-uv pip install -e .
-```
-
-### 使用pip安装
-
-```bash
-pip install mcp-scholar
-```
-
-## 使用方法
-
 ### 启动服务器
 
 ```bash
@@ -42,7 +23,7 @@ uv --directory 路径\到\mcp_scholar run mcp-scholar
 
 ### 在Cherry Studio中使用
 
-- 「参照官方教程：https://vaayne.com/posts/2025/mcp-guide」
+- 「参照官方教程：https://vaayne.com/posts/2025/mcp-guide 」
  
 ## 示例用法
 
