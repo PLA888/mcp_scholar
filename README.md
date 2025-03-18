@@ -33,11 +33,11 @@ pip install mcp-scholar
 ### 启动服务器
 
 ```bash
-# 使用uvx启动
+# 方式一：使用uvx启动
 uvx mcp-scholar
 
-# 或者直接使用Python模块
-python -m mcp_scholar
+# 方式二：clone仓库后使用uv run启动
+uv --directory 路径\到\mcp_scholar run mcp-scholar
 ```
 
 ### 在Cherry Studio中使用
