@@ -23,7 +23,7 @@ async def test_search_scholar():
 
 async def test_parse_real_profile():
     print("\n测试解析真实谷歌学术个人主页...")
-    url = "https://scholar.google.com/citations?user=SJdlvnQAAAAJ&hl=en"
+    url = "https://scholar.google.com/citations?user=DhtAFkwAAAAJ&hl=en"
     profile_id = extract_profile_id_from_url(url)  # 提取 SJdlvnQAAAAJ
 
     async with httpx.AsyncClient() as client:
@@ -33,7 +33,7 @@ async def test_parse_real_profile():
             response.raise_for_status()  # 确保请求成功
 
             # 解析个人主页
-            papers = await parse_profile(profile_id, top_n=5)
+            papers = await parse_profile(profile_id, top_n=100)
 
             print(f"解析出 {len(papers)} 篇最高引用论文:")
             for i, paper in enumerate(papers, 1):
