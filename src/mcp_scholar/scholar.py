@@ -123,7 +123,12 @@ def convert_inverted_index_to_text(inverted_index: Dict[str, List[int]]) -> str:
 
 
 async def search_scholar(
-    query: str, count: int = 5, fuzzy_search: bool = False
+    query: str,
+    count: int = 5,
+    fuzzy_search: bool = False,
+    sort_by: str = "relevance",
+    year_start: Optional[int] = None,
+    year_end: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     使用OpenAlex API搜索学术论文
@@ -132,9 +137,16 @@ async def search_scholar(
         query: 搜索关键词
         count: 返回结果数量
         fuzzy_search: 是否启用模糊搜索，当为True时使用更宽松的搜索策略
+        sort_by: 排序方式，可选值:
+            - "relevance": 按相关性排序（默认）
+            - "citations": 按引用量排序
+            - "date": 按发表日期排序（新到旧）
+            - "title": 按标题字母顺序排序
+        year_start: 开始年份，可选
+        year_end: 结束年份，可选
 
     Returns:
-        List[Dict]: 论文信息列表，按引用量排序
+        List[Dict]: 论文信息列表
     """
     results = []
     try:
@@ -152,8 +164,25 @@ async def search_scholar(
             # 精确搜索：在标题中搜索
             search_url = f"{OPENALEX_API}/works?filter=title.search:{encoded_query}{email_param}&per_page={count*2}"
 
-        # 添加引用数排序
-        search_url += "&sort=cited_by_count:desc"
+        # 添加年份过滤条件
+        if year_start is not None or year_end is not None:
+            year_filter = ""
+            if year_start is not None and year_end is not None:
+                year_filter = f"&filter=publication_year:>{year_start-1},publication_year:<{year_end+1}"
+            elif year_start is not None:
+                year_filter = f"&filter=publication_year:>{year_start-1}"
+            elif year_end is not None:
+                year_filter = f"&filter=publication_year:<{year_end+1}"
+            search_url += year_filter
+
+        # 添加排序方式
+        if sort_by == "citations":
+            search_url += "&sort=cited_by_count:desc"
+        elif sort_by == "date":
+            search_url += "&sort=publication_date:desc"
+        elif sort_by == "title":
+            search_url += "&sort=title:asc"
+        # 相关性(relevance)是默认排序，不需要额外参数
 
         # 准备API请求
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -204,13 +233,6 @@ async def search_scholar(
                     paper = await enrich_abstract(paper)
 
                     results.append(paper)
-
-                # 对于模糊搜索，可能需要基于相关性进行额外排序
-                if fuzzy_search and results:
-                    # 按引用量排序
-                    results = sorted(results, key=lambda x: -x["citations"])
-                else:
-                    results = sorted(results, key=lambda x: -x["citations"])
 
                 # 只返回需要的数量
                 return results[:count]
@@ -313,13 +335,20 @@ async def get_paper_detail(paper_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def get_paper_references(paper_id: str, count: int = 5) -> List[Dict[str, Any]]:
+async def get_paper_references(
+    paper_id: str, count: int = 5, sort_by: str = "relevance"
+) -> List[Dict[str, Any]]:
     """
     通过OpenAlex API获取引用指定论文的文献
 
     Args:
         paper_id: 论文ID，可以是OpenAlex ID、DOI或ArXiv ID
         count: 返回结果数量
+        sort_by: 排序方式，可选值:
+            - "relevance": 按相关性排序（默认）
+            - "citations": 按引用量排序
+            - "date": 按发表日期排序（新到旧）
+            - "title": 按标题字母顺序排序
 
     Returns:
         List[Dict]: 引用论文信息列表
@@ -361,7 +390,16 @@ async def get_paper_references(paper_id: str, count: int = 5) -> List[Dict[str, 
             openalex_id = openalex_id[1:]
 
         # 构建引用查询
-        citations_url = f"{OPENALEX_API}/works?filter=cites:W{openalex_id}{email_param}&per_page={count}&sort=cited_by_count:desc"
+        citations_url = f"{OPENALEX_API}/works?filter=cites:W{openalex_id}{email_param}&per_page={count}"
+
+        # 添加排序方式
+        if sort_by == "citations":
+            citations_url += "&sort=cited_by_count:desc"
+        elif sort_by == "date":
+            citations_url += "&sort=publication_date:desc"
+        elif sort_by == "title":
+            citations_url += "&sort=title:asc"
+        # 相关性(relevance)是默认排序，不需要额外参数
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.get(citations_url)
@@ -409,8 +447,7 @@ async def get_paper_references(paper_id: str, count: int = 5) -> List[Dict[str, 
 
                     results.append(paper)
 
-                # 按引用次数排序
-                return sorted(results, key=lambda x: -x["citations"])
+                return results
             else:
                 print(f"获取论文引用错误: {response.status_code} - {response.text}")
                 return []
@@ -513,13 +550,20 @@ def extract_profile_id_from_url(url: str) -> str:
     return ""
 
 
-async def parse_profile(profile_id: str, top_n: int = 5) -> List[Dict[str, Any]]:
+async def parse_profile(
+    profile_id: str, top_n: int = 5, sort_by: str = "relevance"
+) -> List[Dict[str, Any]]:
     """
     通过OpenAlex API解析学者档案和论文
 
     Args:
         profile_id: 学者ID
         top_n: 返回结果数量
+        sort_by: 排序方式，可选值:
+            - "relevance": 按相关性排序（默认）
+            - "citations": 按引用量排序
+            - "date": 按发表日期排序（新到旧）
+            - "title": 按标题字母顺序排序
 
     Returns:
         List[Dict]: 论文信息列表
@@ -554,7 +598,17 @@ async def parse_profile(profile_id: str, top_n: int = 5) -> List[Dict[str, Any]]
             author_data = author_response.json()
 
             # 获取作者论文
-            papers_url = f"{OPENALEX_API}/works?filter=author.id:{author_data['id']}{email_param}&per_page={top_n*2}&sort=cited_by_count:desc"
+            papers_url = f"{OPENALEX_API}/works?filter=author.id:{author_data['id']}{email_param}&per_page={top_n*2}"
+
+            # 添加排序方式
+            if sort_by == "citations":
+                papers_url += "&sort=cited_by_count:desc"
+            elif sort_by == "date":
+                papers_url += "&sort=publication_date:desc"
+            elif sort_by == "title":
+                papers_url += "&sort=title:asc"
+            # 相关性(relevance)是默认排序，不需要额外参数
+
             papers_response = await client.get(papers_url)
 
             if papers_response.status_code != 200:
@@ -604,8 +658,6 @@ async def parse_profile(profile_id: str, top_n: int = 5) -> List[Dict[str, Any]]
 
                 result_papers.append(paper)
 
-            # 按引用数排序并返回top_n篇论文
-            result_papers = sorted(result_papers, key=lambda x: -x["citations"])
             return result_papers[:top_n]
 
     except Exception as e:

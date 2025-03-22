@@ -92,7 +92,13 @@ def search_prompt() -> str:
 # 工具函数
 @mcp.tool()
 async def scholar_search(
-    ctx: Context, keywords: str, count: int = 5, fuzzy_search: bool = False
+    ctx: Context,
+    keywords: str,
+    count: int = 5,
+    fuzzy_search: bool = False,
+    sort_by: str = "relevance",
+    year_start: Optional[int] = None,
+    year_end: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     搜索谷歌学术并返回论文摘要
@@ -101,6 +107,13 @@ async def scholar_search(
         keywords: 搜索关键词
         count: 返回结果数量，默认为5
         fuzzy_search: 是否使用模糊搜索，默认为False
+        sort_by: 排序方式，可选值:
+            - "relevance": 按相关性排序（默认）
+            - "citations": 按引用量排序
+            - "date": 按发表日期排序（新到旧）
+            - "title": 按标题字母顺序排序
+        year_start: 开始年份，可选
+        year_end: 结束年份，可选
 
     Returns:
         Dict: 包含论文列表的字典
@@ -108,7 +121,27 @@ async def scholar_search(
     try:
         search_mode = "模糊搜索" if fuzzy_search else "精确搜索"
         logger.info(f"正在进行{search_mode}谷歌学术: {keywords}...")
-        results = await search_scholar(keywords, count, fuzzy_search=fuzzy_search)
+
+        # 添加年份信息到日志
+        year_info = ""
+        if year_start and year_end:
+            year_info = f"，年份范围: {year_start}-{year_end}"
+        elif year_start:
+            year_info = f"，起始年份: {year_start}"
+        elif year_end:
+            year_info = f"，截止年份: {year_end}"
+
+        if year_info:
+            logger.info(f"应用年份过滤{year_info}")
+
+        results = await search_scholar(
+            keywords,
+            count,
+            fuzzy_search=fuzzy_search,
+            sort_by=sort_by,
+            year_start=year_start,
+            year_end=year_end,
+        )
 
         papers = []
         for p in results:
@@ -133,6 +166,12 @@ async def scholar_search(
             "papers": papers,
             "search_mode": search_mode,
             "total_results": len(papers),
+            "sort_by": sort_by,
+            "year_filter": (
+                {"start": year_start, "end": year_end}
+                if (year_start or year_end)
+                else None
+            ),
         }
     except Exception as e:
         logger.error(f"搜索失败: {str(e)}", exc_info=True)
@@ -141,7 +180,13 @@ async def scholar_search(
 
 @mcp.tool()
 async def adaptive_search(
-    ctx: Context, keywords: str, count: int = 5, min_results: int = 3
+    ctx: Context,
+    keywords: str,
+    count: int = 5,
+    min_results: int = 3,
+    sort_by: str = "relevance",
+    year_start: Optional[int] = None,
+    year_end: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     自适应搜索谷歌学术，先尝试精确搜索，如果结果太少则自动切换到模糊搜索
@@ -150,6 +195,13 @@ async def adaptive_search(
         keywords: 搜索关键词
         count: 返回结果数量，默认为5
         min_results: 最少需要返回的结果数量，少于此数量会触发模糊搜索，默认为3
+        sort_by: 排序方式，可选值:
+            - "relevance": 按相关性排序（默认）
+            - "citations": 按引用量排序
+            - "date": 按发表日期排序（新到旧）
+            - "title": 按标题字母顺序排序
+        year_start: 开始年份，可选
+        year_end: 结束年份，可选
 
     Returns:
         Dict: 包含论文列表和搜索模式的字典
@@ -157,7 +209,26 @@ async def adaptive_search(
     try:
         # 先进行精确搜索
         logger.info(f"开始自适应搜索流程，首先进行精确搜索: {keywords}...")
-        precise_results = await search_scholar(keywords, count, fuzzy_search=False)
+
+        # 添加年份信息到日志
+        if year_start or year_end:
+            year_range = ""
+            if year_start and year_end:
+                year_range = f"{year_start}-{year_end}"
+            elif year_start:
+                year_range = f"从{year_start}年起"
+            elif year_end:
+                year_range = f"至{year_end}年止"
+            logger.info(f"使用年份过滤: {year_range}")
+
+        precise_results = await search_scholar(
+            keywords,
+            count,
+            fuzzy_search=False,
+            sort_by=sort_by,
+            year_start=year_start,
+            year_end=year_end,
+        )
 
         search_mode = "精确搜索"
         final_results = precise_results
@@ -167,7 +238,14 @@ async def adaptive_search(
             logger.info(
                 f"精确搜索结果不足({len(precise_results)}<{min_results})，切换到模糊搜索"
             )
-            fuzzy_results = await search_scholar(keywords, count, fuzzy_search=True)
+            fuzzy_results = await search_scholar(
+                keywords,
+                count,
+                fuzzy_search=True,
+                sort_by=sort_by,
+                year_start=year_start,
+                year_end=year_end,
+            )
             search_mode = "模糊搜索(由于精确搜索结果不足)"
             final_results = fuzzy_results
 
@@ -192,6 +270,12 @@ async def adaptive_search(
             "papers": papers,
             "search_mode": search_mode,
             "total_results": len(papers),
+            "sort_by": sort_by,
+            "year_filter": (
+                {"start": year_start, "end": year_end}
+                if (year_start or year_end)
+                else None
+            ),
         }
     except Exception as e:
         logger.error(f"自适应搜索失败: {str(e)}", exc_info=True)
@@ -236,7 +320,7 @@ async def paper_detail(ctx: Context, paper_id: str) -> Dict[str, Any]:
 
 @mcp.tool()
 async def paper_references(
-    ctx: Context, paper_id: str, count: int = 5
+    ctx: Context, paper_id: str, count: int = 5, sort_by: str = "relevance"
 ) -> Dict[str, Any]:
     """
     获取引用指定论文的文献列表
@@ -244,6 +328,11 @@ async def paper_references(
     Args:
         paper_id: 论文ID
         count: 返回结果数量，默认为5
+        sort_by: 排序方式，可选值:
+            - "relevance": 按相关性排序（默认）
+            - "citations": 按引用量排序
+            - "date": 按发表日期排序（新到旧）
+            - "title": 按标题字母顺序排序
 
     Returns:
         Dict: 引用论文列表
@@ -251,7 +340,7 @@ async def paper_references(
     try:
         # 移除进度显示
         logger.info(f"正在获取论文ID为 {paper_id} 的引用...")
-        references = await get_paper_references(paper_id, count)
+        references = await get_paper_references(paper_id, count, sort_by=sort_by)
 
         refs = []
         for ref in references:
@@ -268,7 +357,11 @@ async def paper_references(
                 }
             )
 
-        return {"status": "success", "references": refs}
+        return {
+            "status": "success",
+            "references": refs,
+            "sort_by": sort_by,
+        }
     except Exception as e:
         error_msg = f"获取论文引用失败: {str(e)}"
         # 移除错误通知
@@ -278,14 +371,19 @@ async def paper_references(
 
 @mcp.tool()
 async def profile_papers(
-    ctx: Context, profile_url: str, count: int = 5
+    ctx: Context, profile_url: str, count: int = 5, sort_by: str = "relevance"
 ) -> Dict[str, Any]:
     """
-    获取学者的高引用论文
+    获取学者的论文
 
     Args:
         profile_url: 谷歌学术个人主页URL
         count: 返回结果数量，默认为5
+        sort_by: 排序方式，可选值:
+            - "relevance": 按相关性排序（默认）
+            - "citations": 按引用量排序
+            - "date": 按发表日期排序（新到旧）
+            - "title": 按标题字母顺序排序
 
     Returns:
         Dict: 论文列表
@@ -300,7 +398,7 @@ async def profile_papers(
             logger.error("无法从URL中提取学者ID")
             return {"status": "error", "message": "无法从URL中提取学者ID"}
 
-        papers = await parse_profile(profile_id, count)
+        papers = await parse_profile(profile_id, count, sort_by=sort_by)
 
         result_papers = []
         for p in papers:
@@ -318,7 +416,11 @@ async def profile_papers(
                 }
             )
 
-        return {"status": "success", "papers": result_papers}
+        return {
+            "status": "success",
+            "papers": result_papers,
+            "sort_by": sort_by,
+        }
     except Exception as e:
         error_msg = f"获取学者论文失败: {str(e)}"
         # 移除错误通知
@@ -327,13 +429,27 @@ async def profile_papers(
 
 
 @mcp.tool()
-async def summarize_papers(ctx: Context, topic: str, count: int = 5) -> str:
+async def summarize_papers(
+    ctx: Context,
+    topic: str,
+    count: int = 5,
+    sort_by: str = "relevance",
+    year_start: Optional[int] = None,
+    year_end: Optional[int] = None,
+) -> str:
     """
     搜索并总结特定主题的论文
 
     Args:
         topic: 研究主题
         count: 返回结果数量，默认为5
+        sort_by: 排序方式，可选值:
+            - "relevance": 按相关性排序（默认）
+            - "citations": 按引用量排序
+            - "date": 按发表日期排序（新到旧）
+            - "title": 按标题字母顺序排序
+        year_start: 开始年份，可选
+        year_end: 结束年份，可选
 
     Returns:
         str: 论文总结的Markdown格式文本
@@ -342,19 +458,59 @@ async def summarize_papers(ctx: Context, topic: str, count: int = 5) -> str:
         # 移除进度显示
         logger.info(f"正在搜索并总结关于 {topic} 的论文...")
 
+        # 记录年份过滤信息
+        if year_start or year_end:
+            year_info = ""
+            if year_start and year_end:
+                year_info = f"{year_start}-{year_end}年间"
+            elif year_start:
+                year_info = f"{year_start}年后"
+            elif year_end:
+                year_info = f"{year_end}年前"
+            logger.info(f"应用年份过滤: {year_info}")
+
         # 搜索论文
-        results = await search_scholar(topic, count)
+        results = await search_scholar(
+            topic,
+            count,
+            sort_by=sort_by,
+            year_start=year_start,
+            year_end=year_end,
+        )
 
         if not results:
-            return f"未找到关于 {topic} 的论文。"
+            if year_start or year_end:
+                year_info = ""
+                if year_start and year_end:
+                    year_info = f"{year_start}-{year_end}年间"
+                elif year_start:
+                    year_info = f"{year_start}年后"
+                elif year_end:
+                    year_info = f"{year_end}年前"
+                return f"未找到{year_info}关于 {topic} 的论文。"
+            else:
+                return f"未找到关于 {topic} 的论文。"
 
         # 构建总结
         summary = f"# {topic} 相关研究总结\n\n"
-        summary += f"以下是关于 {topic} 的 {len(results)} 篇高引用研究论文的总结：\n\n"
+
+        # 添加年份范围信息
+        if year_start or year_end:
+            year_info = ""
+            if year_start and year_end:
+                year_info = f"{year_start}-{year_end}年间"
+            elif year_start:
+                year_info = f"{year_start}年后"
+            elif year_end:
+                year_info = f"{year_end}年前"
+            summary += f"以下是{year_info}关于 {topic} 的 {len(results)} 篇研究论文的总结：\n\n"
+        else:
+            summary += f"以下是关于 {topic} 的 {len(results)} 篇研究论文的总结：\n\n"
 
         for i, paper in enumerate(results):
             summary += f"### {i+1}. {paper['title']}\n"
             summary += f"**作者**: {paper['authors']}\n"
+            summary += f"**年份**: {paper.get('year', '未知')}\n"
             summary += f"**引用量**: {paper['citations']}\n"
             if paper.get("url"):
                 summary += (
